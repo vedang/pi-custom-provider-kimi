@@ -24,6 +24,7 @@ pi install -l git:github.com/vedang/pi-custom-provider-kimi
   - `kimi-k2.7-code-highspeed`
 - Forces Kimi-required sampling defaults (`temperature: 1.0`, `top_p: 0.95`)
 - Sends preserved-thinking payload defaults for tool-call continuity
+- Uses dedicated API id `kimi-custom-openai-completions` while delegating to OpenAI-compatible transport
 
 ## Configuration
 

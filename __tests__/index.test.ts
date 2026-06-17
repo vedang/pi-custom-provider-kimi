@@ -8,6 +8,7 @@ import { test } from "vitest";
 import {
   DEFAULT_TEMPERATURE,
   DEFAULT_TOP_P,
+  KIMI_API_ID,
   KIMI_BASE_URL,
   type KimiProviderConfig,
   type KimiRuntimeSettings,
@@ -184,14 +185,26 @@ test("index extension registers kimi-custom provider", () => {
   } as never);
 
   assert.equal(registeredName, "kimi-custom");
-  assert.equal(registeredConfig?.api, "openai-completions");
+  assert.equal(registeredConfig?.api, KIMI_API_ID);
   assert.equal(registeredConfig?.baseUrl, KIMI_BASE_URL);
+});
+
+test("buildKimiProviderConfig uses dedicated Kimi API wiring for fixed sampling", () => {
+  const config = buildConfig({
+    MOONSHOT_API_KEY: "moonshot-key",
+  });
+
+  assert.equal(config.api, KIMI_API_ID);
+  assert.deepEqual(
+    config.models.map((model) => model.api),
+    [KIMI_API_ID, KIMI_API_ID, KIMI_API_ID],
+  );
 });
 
 test("buildKimiProviderConfig returns no models when MOONSHOT_API_KEY is not configured", () => {
   const config = buildConfig();
 
-  assert.equal(config.api, "openai-completions");
+  assert.equal(config.api, KIMI_API_ID);
   assert.equal(config.baseUrl, KIMI_BASE_URL);
   assert.equal(config.apiKey, "MOONSHOT_API_KEY");
   assert.equal(config.models.length, 0);

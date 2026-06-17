@@ -7,6 +7,7 @@ import type {
 } from "@mariozechner/pi-ai";
 
 export const KIMI_BASE_URL = "https://api.moonshot.ai/v1";
+export const KIMI_API_ID = "kimi-custom-openai-completions";
 export const DEFAULT_TEMPERATURE = 1.0;
 export const DEFAULT_TOP_P = 0.95;
 
@@ -56,15 +57,19 @@ interface KimiProviderModelConfig {
   compat: typeof KIMI_COMPAT;
   baseUrl: string;
   apiKey: string;
+  api: typeof KIMI_API_ID;
 }
 
 interface KimiModelTemplate
-  extends Omit<KimiProviderModelConfig, "baseUrl" | "apiKey" | "compat"> {}
+  extends Omit<
+    KimiProviderModelConfig,
+    "baseUrl" | "apiKey" | "compat" | "api"
+  > {}
 
 export interface KimiProviderConfig {
   baseUrl: string;
   apiKey: string;
-  api: "openai-completions";
+  api: typeof KIMI_API_ID;
   streamSimple: KimiStreamSimple;
   models: KimiProviderModelConfig[];
 }
@@ -125,6 +130,17 @@ function resolveKimiRuntimeSettings(): KimiRuntimeSettings {
   };
 }
 
+function buildKimiRouteOverrides(
+  apiKey: string,
+): Pick<KimiProviderModelConfig, "api" | "baseUrl" | "apiKey" | "compat"> {
+  return {
+    api: KIMI_API_ID,
+    baseUrl: KIMI_BASE_URL,
+    apiKey,
+    compat: KIMI_COMPAT,
+  };
+}
+
 function materializeModel(
   template: KimiModelTemplate,
   env: Record<string, string | undefined>,
@@ -140,9 +156,7 @@ function materializeModel(
     cost: template.cost,
     contextWindow: template.contextWindow,
     maxTokens: template.maxTokens,
-    compat: KIMI_COMPAT,
-    baseUrl: KIMI_BASE_URL,
-    apiKey,
+    ...buildKimiRouteOverrides(apiKey),
   };
 }
 
@@ -175,9 +189,7 @@ function routeModelToKimiEndpoint(
 
   return {
     ...modelRecord,
-    baseUrl: KIMI_BASE_URL,
-    apiKey,
-    compat: KIMI_COMPAT,
+    ...buildKimiRouteOverrides(apiKey),
   };
 }
 
@@ -280,7 +292,7 @@ export function buildKimiProviderConfig(
   return {
     baseUrl: KIMI_BASE_URL,
     apiKey: resolveProviderFallbackApiKey(env),
-    api: "openai-completions",
+    api: KIMI_API_ID,
     streamSimple: input.streamSimple,
     models: resolveModels(env),
   };
