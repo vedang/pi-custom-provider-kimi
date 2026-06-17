@@ -1,5 +1,7 @@
 # Custom Provider: Kimi
 
+![pi-custom-provider-kimi banner](images/banner.png)
+
 A custom provider extension that exposes selected Kimi models through Kimi Open Platform's OpenAI-compatible Chat Completions API.
 
 ## Install
