@@ -22,8 +22,8 @@ pi install -l git:github.com/vedang/pi-custom-provider-kimi
   - `kimi-k2.6`
   - `kimi-k2.7-code`
   - `kimi-k2.7-code-highspeed`
-- Forces Kimi-required sampling defaults (`temperature: 1.0`, `top_p: 0.95`)
-- Sends preserved-thinking payload defaults for tool-call continuity
+- Forces Kimi-required sampling values (`temperature: 1.0` when thinking, `0.6` for K2.6 non-thinking, and `top_p: 0.95`)
+- Preserves thinking for tool-call continuity; K2.7 correctly remains thinking-only
 - Uses dedicated API id `kimi-custom-openai-completions` while delegating to OpenAI-compatible transport
 
 ## Configuration
@@ -75,4 +75,4 @@ make test
 
 ## Notes
 
-Kimi docs state K2.6/K2.7 Code accept only fixed sampling values. This provider deliberately overrides caller or role-level sampling knobs to avoid request errors.
+Kimi docs state K2.6/K2.7 Code accept only fixed sampling values. This provider deliberately overrides caller or role-level sampling knobs to avoid request errors. K2.6 follows pi's thinking toggle; K2.7 rejects non-thinking mode and is therefore always registered with thinking enabled.

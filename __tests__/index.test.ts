@@ -129,7 +129,7 @@ type ExpectedModelProps = {
   name: string;
   reasoning: boolean;
   baseUrl: string;
-  apiKey: string;
+  thinkingLevelMap?: Record<string, string | null>;
   cost: {
     input: number;
     output: number;
@@ -149,7 +149,8 @@ function assertModelProps(
   assert.equal(model.reasoning, expected.reasoning);
   assert.deepEqual(model.input, ["text", "image"]);
   assert.equal(model.baseUrl, expected.baseUrl);
-  assert.equal(model.apiKey, expected.apiKey);
+  assert.equal(Object.hasOwn(model, "apiKey"), false);
+  assert.deepEqual(model.thinkingLevelMap, expected.thinkingLevelMap);
   assert.deepEqual(model.cost, expected.cost);
   assert.equal(model.contextWindow, expected.contextWindow);
   assert.equal(model.maxTokens, expected.maxTokens);
@@ -157,7 +158,9 @@ function assertModelProps(
     supportsStore: false,
     supportsDeveloperRole: false,
     supportsReasoningEffort: false,
-    maxTokensField: "max_completion_tokens",
+    maxTokensField: "max_tokens",
+    supportsStrictMode: false,
+    thinkingFormat: "deepseek",
   });
 }
 
@@ -171,9 +174,11 @@ function assertModelList(
   }
 }
 
-test("index extension registers kimi-custom provider", () => {
+test("index extension registers kimi-custom provider through modern pi exports", () => {
   const source = readFileSync(indexPath, "utf-8");
   assert.match(source, /registerProvider\([\s\S]*"kimi-custom"/);
+  assert.match(source, /@earendil-works\/pi-ai\/api\/openai-completions/);
+  assert.doesNotMatch(source, /@mariozechner\//);
 
   let registeredName: string | undefined;
   let registeredConfig: KimiProviderConfig | undefined;
@@ -206,7 +211,7 @@ test("buildKimiProviderConfig returns no models when MOONSHOT_API_KEY is not con
 
   assert.equal(config.api, KIMI_API_ID);
   assert.equal(config.baseUrl, KIMI_BASE_URL);
-  assert.equal(config.apiKey, "MOONSHOT_API_KEY");
+  assert.equal(config.apiKey, "$MOONSHOT_API_KEY");
   assert.equal(config.models.length, 0);
 });
 
@@ -220,7 +225,6 @@ test("buildKimiProviderConfig registers only requested Kimi K2 models when MOONS
       name: "Kimi K2.6",
       reasoning: true,
       baseUrl: KIMI_BASE_URL,
-      apiKey: "moonshot-key",
       cost: { input: 0.95, output: 4.0, cacheRead: 0.16, cacheWrite: 0 },
       contextWindow: 262_144,
       maxTokens: 32_768,
@@ -230,7 +234,7 @@ test("buildKimiProviderConfig registers only requested Kimi K2 models when MOONS
       name: "Kimi K2.7 Code",
       reasoning: true,
       baseUrl: KIMI_BASE_URL,
-      apiKey: "moonshot-key",
+      thinkingLevelMap: { off: null },
       cost: { input: 0.95, output: 4.0, cacheRead: 0.19, cacheWrite: 0 },
       contextWindow: 262_144,
       maxTokens: 32_768,
@@ -240,13 +244,14 @@ test("buildKimiProviderConfig registers only requested Kimi K2 models when MOONS
       name: "Kimi K2.7 Code HighSpeed",
       reasoning: true,
       baseUrl: KIMI_BASE_URL,
-      apiKey: "moonshot-key",
+      thinkingLevelMap: { off: null },
       cost: { input: 1.9, output: 8.0, cacheRead: 0.38, cacheWrite: 0 },
       contextWindow: 262_144,
       maxTokens: 32_768,
     },
   ];
 
+  assert.equal(config.apiKey, "$MOONSHOT_API_KEY");
   assertModelList(config.models, expectedModels);
   assert.deepEqual(
     config.models.map((model) => model.id),
@@ -282,7 +287,7 @@ test("applyKimiPayloadDefaults injects Kimi-safe temperature and preserved think
   assertPayloadDefaults(payload);
 });
 
-test("createKimiStreamSimple routes known model IDs to Kimi endpoint and key", () => {
+test("createKimiStreamSimple routes known model IDs without embedding the key", () => {
   const { recorder, streamSimple } = createStreamRecorderWithEnv({
     MOONSHOT_API_KEY: "moonshot-key",
   });
@@ -290,11 +295,13 @@ test("createKimiStreamSimple routes known model IDs to Kimi endpoint and key", (
   streamSimple(createTestModel("kimi-k2.7-code"), { messages: [] }, {});
 
   const capturedModel = recorder.getCapturedModel();
+  const capturedOptions = recorder.getCapturedOptions();
   assert.equal(capturedModel?.baseUrl, KIMI_BASE_URL);
-  assert.equal(capturedModel?.apiKey, "moonshot-key");
+  assert.equal(Object.hasOwn(capturedModel ?? {}, "apiKey"), false);
+  assert.equal(capturedOptions?.apiKey, "moonshot-key");
 });
 
-test("createKimiStreamSimple forces Kimi fixed sampling values", () => {
+test("createKimiStreamSimple forces Kimi thinking-mode sampling values", () => {
   const { recorder, streamSimple } = createStreamRecorderWithEnv({
     MOONSHOT_API_KEY: "moonshot-key",
     PI_TEMPERATURE: "0.42",
@@ -303,12 +310,37 @@ test("createKimiStreamSimple forces Kimi fixed sampling values", () => {
   streamSimple(
     createTestModel("kimi-k2.6"),
     { messages: [] },
-    { temperature: 0.75, top_p: 0.5 },
+    { reasoning: "high", temperature: 0.75, top_p: 0.5 },
   );
 
   const capturedOptions = recorder.getCapturedOptions();
   assert.equal(capturedOptions?.temperature, DEFAULT_TEMPERATURE);
   assertPayloadDefaults(invokeCapturedOnPayload(capturedOptions));
+});
+
+test("createKimiStreamSimple uses K2.6 non-thinking sampling when reasoning is off", () => {
+  const { recorder, streamSimple } = createStreamRecorderWithEnv({
+    MOONSHOT_API_KEY: "moonshot-key",
+  });
+
+  streamSimple(createTestModel("kimi-k2.6"), { messages: [] }, {});
+
+  const capturedOptions = recorder.getCapturedOptions();
+  const payload = invokeCapturedOnPayload(capturedOptions);
+  assert.equal(capturedOptions?.temperature, 0.6);
+  assert.equal(payload.temperature, 0.6);
+  assert.equal(payload.top_p, DEFAULT_TOP_P);
+  assert.deepEqual(payload.thinking, { type: "disabled" });
+});
+
+test("createKimiStreamSimple keeps K2.7 thinking enabled when reasoning is off", () => {
+  const { recorder, streamSimple } = createStreamRecorderWithEnv({
+    MOONSHOT_API_KEY: "moonshot-key",
+  });
+
+  streamSimple(createTestModel("kimi-k2.7-code"), { messages: [] }, {});
+
+  assertPayloadDefaults(invokeCapturedOnPayload(recorder.getCapturedOptions()));
 });
 
 test("createKimiStreamSimple overrides caller apiKey with routed Kimi key", () => {
@@ -324,7 +356,7 @@ test("createKimiStreamSimple overrides caller apiKey with routed Kimi key", () =
 
   const capturedModel = recorder.getCapturedModel();
   const capturedOptions = recorder.getCapturedOptions();
-  assert.equal(capturedModel?.apiKey, "moonshot-key");
+  assert.equal(Object.hasOwn(capturedModel ?? {}, "apiKey"), false);
   assert.equal(capturedOptions?.apiKey, "moonshot-key");
 });
 
@@ -338,6 +370,7 @@ test("createKimiStreamSimple enforces payload defaults while preserving caller o
     createTestModel("kimi-k2.6"),
     { messages: [] },
     {
+      reasoning: "high",
       onPayload(payload) {
         callerOnPayloadSeen = true;
         (payload as Record<string, unknown>).fromCaller = true;
@@ -370,5 +403,29 @@ test("createKimiStreamSimple keeps caller replacement payload and applies defaul
   const payload = invokeCapturedOnPayload(recorder.getCapturedOptions());
 
   assert.equal(payload.replaced, true);
+  assertPayloadDefaults(payload);
+});
+
+test("createKimiStreamSimple keeps async replacement payload and applies defaults", async () => {
+  const { recorder, streamSimple } = createStreamRecorderWithEnv({
+    MOONSHOT_API_KEY: "moonshot-key",
+  });
+
+  streamSimple(
+    createTestModel("kimi-k2.7-code"),
+    { messages: [] },
+    {
+      async onPayload() {
+        return { replacedAsync: true };
+      },
+    },
+  );
+
+  const onPayload = recorder.getCapturedOptions()?.onPayload as
+    | ((payload: unknown) => unknown)
+    | undefined;
+  const payload = (await onPayload?.({})) as Record<string, unknown>;
+
+  assert.equal(payload.replacedAsync, true);
   assertPayloadDefaults(payload);
 });

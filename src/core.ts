@@ -4,19 +4,29 @@ import type {
   Context,
   Model,
   SimpleStreamOptions,
-} from "@mariozechner/pi-ai";
+  ThinkingLevelMap,
+} from "@earendil-works/pi-ai";
 
 export const KIMI_BASE_URL = "https://api.moonshot.ai/v1";
 export const KIMI_API_ID = "kimi-custom-openai-completions";
 export const DEFAULT_TEMPERATURE = 1.0;
+const NON_THINKING_TEMPERATURE = 0.6;
 export const DEFAULT_TOP_P = 0.95;
 
-const API_KEY_ENV_PLACEHOLDER = "MOONSHOT_API_KEY";
 const KIMI_API_KEY_ENV_KEY = "MOONSHOT_API_KEY";
 
 export interface KimiRuntimeSettings {
   temperature: number;
   topP: number;
+}
+
+type KimiThinkingPayload =
+  | { type: "enabled"; keep: "all" }
+  | { type: "disabled" };
+
+interface KimiModelRoutingResult {
+  model: unknown;
+  apiKey: string | undefined;
 }
 
 export interface KimiSimpleOptions
@@ -55,16 +65,13 @@ interface KimiProviderModelConfig {
   contextWindow: number;
   maxTokens: number;
   compat: typeof KIMI_COMPAT;
+  thinkingLevelMap?: ThinkingLevelMap;
   baseUrl: string;
-  apiKey: string;
   api: typeof KIMI_API_ID;
 }
 
 interface KimiModelTemplate
-  extends Omit<
-    KimiProviderModelConfig,
-    "baseUrl" | "apiKey" | "compat" | "api"
-  > {}
+  extends Omit<KimiProviderModelConfig, "baseUrl" | "compat" | "api"> {}
 
 export interface KimiProviderConfig {
   baseUrl: string;
@@ -78,8 +85,14 @@ const KIMI_COMPAT = {
   supportsStore: false,
   supportsDeveloperRole: false,
   supportsReasoningEffort: false,
-  maxTokensField: "max_completion_tokens" as const,
-};
+  maxTokensField: "max_tokens" as const,
+  supportsStrictMode: false,
+  thinkingFormat: "deepseek" as const,
+} satisfies NonNullable<Model<"openai-completions">["compat"]>;
+
+const KIMI_K27_THINKING_LEVEL_MAP = {
+  off: null,
+} satisfies ThinkingLevelMap;
 
 const SHARED_MODEL_DEFAULTS = {
   reasoning: true,
@@ -99,17 +112,23 @@ const KIMI_MODELS: KimiModelTemplate[] = [
     ...SHARED_MODEL_DEFAULTS,
     id: "kimi-k2.7-code",
     name: "Kimi K2.7 Code",
+    thinkingLevelMap: KIMI_K27_THINKING_LEVEL_MAP,
     cost: { input: 0.95, output: 4.0, cacheRead: 0.19, cacheWrite: 0 },
   },
   {
     ...SHARED_MODEL_DEFAULTS,
     id: "kimi-k2.7-code-highspeed",
     name: "Kimi K2.7 Code HighSpeed",
+    thinkingLevelMap: KIMI_K27_THINKING_LEVEL_MAP,
     cost: { input: 1.9, output: 8.0, cacheRead: 0.38, cacheWrite: 0 },
   },
 ];
 
 const KIMI_MODEL_IDS = new Set<string>(KIMI_MODELS.map((model) => model.id));
+const KIMI_K27_MODEL_IDS = new Set<string>([
+  "kimi-k2.7-code",
+  "kimi-k2.7-code-highspeed",
+]);
 
 function parseOptionalString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -123,20 +142,25 @@ function resolveKimiApiKey(
   return parseOptionalString(env[KIMI_API_KEY_ENV_KEY]);
 }
 
-function resolveKimiRuntimeSettings(): KimiRuntimeSettings {
+function resolveKimiRuntimeSettings(
+  thinking: KimiThinkingPayload = { type: "enabled", keep: "all" },
+): KimiRuntimeSettings {
   return {
-    temperature: DEFAULT_TEMPERATURE,
+    temperature:
+      thinking.type === "disabled"
+        ? NON_THINKING_TEMPERATURE
+        : DEFAULT_TEMPERATURE,
     topP: DEFAULT_TOP_P,
   };
 }
 
-function buildKimiRouteOverrides(
-  apiKey: string,
-): Pick<KimiProviderModelConfig, "api" | "baseUrl" | "apiKey" | "compat"> {
+function buildKimiRouteOverrides(): Pick<
+  KimiProviderModelConfig,
+  "api" | "baseUrl" | "compat"
+> {
   return {
     api: KIMI_API_ID,
     baseUrl: KIMI_BASE_URL,
-    apiKey,
     compat: KIMI_COMPAT,
   };
 }
@@ -145,8 +169,7 @@ function materializeModel(
   template: KimiModelTemplate,
   env: Record<string, string | undefined>,
 ): KimiProviderModelConfig | undefined {
-  const apiKey = resolveKimiApiKey(env);
-  if (!apiKey) return undefined;
+  if (!resolveKimiApiKey(env)) return undefined;
 
   return {
     id: template.id,
@@ -156,7 +179,8 @@ function materializeModel(
     cost: template.cost,
     contextWindow: template.contextWindow,
     maxTokens: template.maxTokens,
-    ...buildKimiRouteOverrides(apiKey),
+    thinkingLevelMap: template.thinkingLevelMap,
+    ...buildKimiRouteOverrides(),
   };
 }
 
@@ -176,21 +200,48 @@ function resolveModels(
 function routeModelToKimiEndpoint(
   model: unknown,
   env: Record<string, string | undefined>,
-): unknown {
-  if (!model || typeof model !== "object") return model;
+): KimiModelRoutingResult {
+  if (!model || typeof model !== "object") {
+    return { model, apiKey: undefined };
+  }
 
   const modelRecord = model as Record<string, unknown>;
   const modelId =
     typeof modelRecord.id === "string" ? modelRecord.id.trim() : undefined;
-  if (!modelId || !KIMI_MODEL_IDS.has(modelId)) return model;
+  if (!modelId || !KIMI_MODEL_IDS.has(modelId)) {
+    return { model, apiKey: undefined };
+  }
 
-  const apiKey = resolveKimiApiKey(env);
-  if (!apiKey) return model;
+  const modelWithoutApiKey = Object.fromEntries(
+    Object.entries(modelRecord).filter(([key]) => key !== "apiKey"),
+  );
 
   return {
-    ...modelRecord,
-    ...buildKimiRouteOverrides(apiKey),
+    model: {
+      ...modelWithoutApiKey,
+      ...buildKimiRouteOverrides(),
+    },
+    apiKey: resolveKimiApiKey(env),
   };
+}
+
+function resolveKimiThinkingPayload(
+  model: unknown,
+  reasoning: SimpleStreamOptions["reasoning"],
+): KimiThinkingPayload {
+  const modelId =
+    model &&
+    typeof model === "object" &&
+    "id" in model &&
+    typeof model.id === "string"
+      ? model.id.trim()
+      : undefined;
+
+  if (modelId && KIMI_K27_MODEL_IDS.has(modelId)) {
+    return { type: "enabled", keep: "all" };
+  }
+
+  return reasoning ? { type: "enabled", keep: "all" } : { type: "disabled" };
 }
 
 function resolvePayloadTarget(
@@ -215,12 +266,13 @@ function isPromiseLike(value: unknown): value is Promise<unknown | undefined> {
  *
  * [tag:kimi_custom_preserved_thinking]
  * Kimi K2.7 Code always preserves thinking. Kimi K2.6 supports it via
- * `thinking.keep = "all"`. Use one invariant payload for both models so tool
- * call turns can replay `reasoning_content` safely.
+ * `thinking.keep = "all"` while thinking is enabled, so tool-call turns can
+ * replay `reasoning_content` safely.
  */
 export function applyKimiPayloadDefaults(
   payload: unknown,
   runtime: KimiRuntimeSettings,
+  thinking: KimiThinkingPayload = { type: "enabled", keep: "all" },
 ): void {
   if (!payload || typeof payload !== "object") return;
   const request = payload as Record<string, unknown>;
@@ -228,7 +280,7 @@ export function applyKimiPayloadDefaults(
   request.temperature = runtime.temperature;
   request.top_p = runtime.topP;
   // [ref:kimi_custom_preserved_thinking]
-  request.thinking = { type: "enabled", keep: "all" };
+  request.thinking = thinking;
 }
 
 /**
@@ -236,26 +288,26 @@ export function applyKimiPayloadDefaults(
  * [ref:kimi_custom_preserved_thinking]
  *
  * [tag:kimi_custom_routed_api_key_precedence]
- * `streamSimpleOpenAICompletions` prioritizes `options.apiKey` over
- * `model.apiKey`. After model-ID routing, mirror the Kimi key into options so
- * caller-provided keys cannot accidentally authenticate against wrong endpoint.
+ * Modern OpenAI Completions streaming reads request auth from options. After
+ * model-ID routing, mirror the Kimi key into options so caller-provided keys
+ * cannot accidentally authenticate against wrong endpoint.
  */
 export function createKimiStreamSimple(
   baseStreamSimple: KimiStreamSimple,
   env: Record<string, string | undefined> = process.env,
 ): KimiStreamSimple {
   return (model, context, options) => {
-    const runtime = resolveKimiRuntimeSettings();
     const callerOnPayload = options?.onPayload;
     const routedModel = routeModelToKimiEndpoint(model, env);
-    const routedApiKey =
-      routedModel && typeof routedModel === "object"
-        ? parseOptionalString((routedModel as Record<string, unknown>).apiKey)
-        : undefined;
+    const thinking = resolveKimiThinkingPayload(
+      routedModel.model,
+      options?.reasoning,
+    );
+    const runtime = resolveKimiRuntimeSettings(thinking);
     const wrappedOptions: KimiSimpleOptions = {
       ...options,
       // [ref:kimi_custom_routed_api_key_precedence]
-      apiKey: routedApiKey ?? options?.apiKey,
+      apiKey: routedModel.apiKey ?? options?.apiKey,
       // [ref:kimi_custom_fixed_sampling]
       temperature: runtime.temperature,
       top_p: runtime.topP,
@@ -265,24 +317,26 @@ export function createKimiStreamSimple(
         if (isPromiseLike(nextPayload)) {
           return nextPayload.then((resolvedPayload) => {
             const target = resolvePayloadTarget(payload, resolvedPayload);
-            applyKimiPayloadDefaults(target, runtime);
+            applyKimiPayloadDefaults(target, runtime, thinking);
             return target;
           });
         }
 
         const target = resolvePayloadTarget(payload, nextPayload);
-        applyKimiPayloadDefaults(target, runtime);
+        applyKimiPayloadDefaults(target, runtime, thinking);
         return target;
       },
     };
-    return baseStreamSimple(routedModel as Model<Api>, context, wrappedOptions);
+    return baseStreamSimple(
+      routedModel.model as Model<Api>,
+      context,
+      wrappedOptions,
+    );
   };
 }
 
-function resolveProviderFallbackApiKey(
-  env: Record<string, string | undefined>,
-): string {
-  return resolveKimiApiKey(env) ?? API_KEY_ENV_PLACEHOLDER;
+function resolveProviderFallbackApiKey(): string {
+  return `$${KIMI_API_KEY_ENV_KEY}`;
 }
 
 export function buildKimiProviderConfig(
@@ -291,7 +345,7 @@ export function buildKimiProviderConfig(
 ): KimiProviderConfig {
   return {
     baseUrl: KIMI_BASE_URL,
-    apiKey: resolveProviderFallbackApiKey(env),
+    apiKey: resolveProviderFallbackApiKey(),
     api: KIMI_API_ID,
     streamSimple: input.streamSimple,
     models: resolveModels(env),
