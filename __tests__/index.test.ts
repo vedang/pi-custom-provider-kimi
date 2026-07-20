@@ -177,7 +177,6 @@ function assertModelList(
 test("index extension registers kimi-custom provider through modern pi exports", () => {
   const source = readFileSync(indexPath, "utf-8");
   assert.match(source, /registerProvider\([\s\S]*"kimi-custom"/);
-  assert.match(source, /@earendil-works\/pi-ai\/api\/openai-completions/);
   assert.doesNotMatch(source, /@mariozechner\//);
 
   let registeredName: string | undefined;
@@ -192,6 +191,24 @@ test("index extension registers kimi-custom provider through modern pi exports",
   assert.equal(registeredName, "kimi-custom");
   assert.equal(registeredConfig?.api, KIMI_API_ID);
   assert.equal(registeredConfig?.baseUrl, KIMI_BASE_URL);
+});
+
+test("index uses loader-safe OpenAI Completions provider factory", () => {
+  const source = readFileSync(indexPath, "utf-8");
+  const compatImport = source.match(
+    /import\s*{([^}]*)}\s*from\s*"@earendil-works\/pi-ai\/compat";/,
+  );
+
+  assert.doesNotMatch(
+    source,
+    /from\s*["']@earendil-works\/pi-ai\/api\/[^"']+["']/,
+  );
+  assert.ok(compatImport, "expected pi-ai compat import");
+  assert.match(compatImport[1], /\bModel\b/);
+  assert.match(compatImport[1], /\bSimpleStreamOptions\b/);
+  assert.match(compatImport[1], /\bopenAICompletionsApi\b/);
+  assert.match(source, /openAICompletionsApi\(\)/);
+  assert.match(source, /openAICompletions\.streamSimple\(/);
 });
 
 test("buildKimiProviderConfig uses dedicated Kimi API wiring for fixed sampling", () => {

@@ -1,5 +1,8 @@
-import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import { streamSimple } from "@earendil-works/pi-ai/api/openai-completions";
+import {
+  type Model,
+  type SimpleStreamOptions,
+  openAICompletionsApi,
+} from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   type KimiStreamSimple,
@@ -7,12 +10,14 @@ import {
   createKimiStreamSimple,
 } from "./core.js";
 
+const openAICompletions = openAICompletionsApi();
+
 const streamSimpleViaOpenAICompletions: KimiStreamSimple = (
   model,
   context,
   options,
 ) => {
-  return streamSimple(
+  return openAICompletions.streamSimple(
     model as Model<"openai-completions">,
     context,
     options as SimpleStreamOptions,
